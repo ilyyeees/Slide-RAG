@@ -1,0 +1,44 @@
+# sliderag - rolling context rag for textbook generation
+# python 3.10+ required
+
+# core vector database
+chromadb>=0.4.22
+
+# embedding models
+sentence-transformers>=2.2.2
+
+# pdf processing - primary
+pymupdf>=1.23.0
+
+# pdf processing - fallback for complex layouts
+pdfplumber>=0.10.0
+
+# http clients for ollama api
+httpx>=0.25.0
+requests>=2.31.0
+
+# progress and logging
+tqdm>=4.66.0
+rich>=13.0.0
+
+# environment management
+python-dotenv>=1.0.0
+
+# token counting for context management
+tiktoken>=0.5.0
+
+# typing extensions for python 3.10
+typing-extensions>=4.8.0
+
+# numpy for embeddings (dependency of sentence-transformers but pinning for compatibility)
+numpy>=1.24.0
+
+# torch cpu version for environments without gpu during development
+# note: on vast.ai with gpu, this will be overridden by cuda version
+# torch>=2.0.0
+
+# huggingface hub for model downloads
+huggingface-hub>=0.19.0
+
+# transformers for tokenizers
+transformers>=4.36.0
