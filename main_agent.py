@@ -372,7 +372,7 @@ class OllamaClient:
     def __init__(
         self,
         base_url: str = "http://localhost:11434",
-        model: str = "deepseek-r1:8b",
+        model: str = "deepseek-r1:32b",
         timeout: int = 300
     ):
         """
@@ -850,7 +850,7 @@ OUTPUT RULES:
         db_path: str = "./chroma_db",
         collection_name: str = "textbook_chunks",
         output_path: str = "output.tex",
-        model: str = "deepseek-r1:8b",
+        model: str = "deepseek-r1:32b",
         ollama_url: str = "http://localhost:11434",
         rolling_context_chars: int = 2500,  # increased for rtx 5090
         retrieval_top_k: int = 5,
