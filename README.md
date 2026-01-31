@@ -56,8 +56,8 @@ curl -fsSL https://ollama.com/install.sh | sh
 # start ollama server (runs in background)
 ollama serve &
 
-# pull the recommended model for latex generation
-ollama pull deepseek-r1:8b
+# pull the reasoning model (32b recommended for best quality)
+ollama pull deepseek-r1:32b
 
 # alternative models (if deepseek unavailable)
 # ollama pull llama3:8b
@@ -146,7 +146,7 @@ options:
   --slides, -s        parsed slides json (default: slides.json)
   --output, -o        output tex file (default: output.tex)
   --db-path, -d       chromadb path (default: ./chroma_db)
-  --model, -m         ollama model (default: deepseek-r1:8b)
+  --model, -m         ollama model (default: deepseek-r1:32b)
   --ollama-url, -u    ollama api url (default: http://localhost:11434)
   --context-chars     rolling context size (default: 1000)
   --top-k, -k         chunks to retrieve per slide (default: 5)
@@ -194,7 +194,7 @@ curl -fsSL https://ollama.com/install.sh | sh
 nohup ollama serve > ollama.log 2>&1 &
 
 # pull the model (this may take a while)
-ollama pull deepseek-r1:8b
+ollama pull deepseek-r1:32b
 
 # upload your pdfs (use scp or direct upload)
 # scp textbook.pdf user@vastai-ip:~/sliderag/

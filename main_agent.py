@@ -1131,8 +1131,8 @@ examples:
     parser.add_argument(
         "--model", "-m",
         type=str,
-        default="deepseek-r1:8b",
-        help="ollama model to use (default: deepseek-r1:8b)"
+        default="deepseek-r1:32b",
+        help="ollama model to use (default: deepseek-r1:32b)"
     )
     
     parser.add_argument(
