@@ -1175,46 +1175,26 @@ OUTPUT RULES:
     
     def _remove_duplicate_sections(self, text: str) -> str:
         """
-        detect and remove sections that duplicate already-written content.
+        detect duplicate sections and log warnings (but don't remove).
         
-        checks section titles against chapter_state and removes duplicates.
+        the ai has context about what's covered, so if it still writes
+        a section, we trust its judgment but log for review.
         """
-        lines = text.split('\n')
-        filtered_lines = []
-        skip_until_next_section = False
+        # just detect and warn, don't delete
+        section_matches = re.findall(r'\\section\{([^}]+)\}', text)
+        for title in section_matches:
+            if self.chapter_state.is_duplicate_section(title):
+                logger.warning(f"potential duplicate section detected: {title}")
         
-        for line in lines:
-            # check for section commands
-            section_match = re.match(r'\\section\{([^}]+)\}', line)
-            subsection_match = re.match(r'\\subsection\{([^}]+)\}', line)
-            
-            if section_match:
-                title = section_match.group(1)
-                if self.chapter_state.is_duplicate_section(title):
-                    logger.warning(f"removing duplicate section: {title}")
-                    skip_until_next_section = True
-                    continue
-                else:
-                    skip_until_next_section = False
-            
-            if subsection_match and not skip_until_next_section:
-                title = subsection_match.group(1)
-                # check if subsection is very similar to existing
-                title_lower = title.lower()
-                for existing in self.chapter_state.subsections:
-                    if title_lower == existing.lower():
-                        logger.warning(f"removing duplicate subsection: {title}")
-                        skip_until_next_section = True
-                        break
-            
-            if not skip_until_next_section:
-                filtered_lines.append(line)
-            elif line.strip().startswith('\\section') or line.strip().startswith('\\chapter'):
-                # new section starts, stop skipping
-                skip_until_next_section = False
-                filtered_lines.append(line)
+        subsection_matches = re.findall(r'\\subsection\{([^}]+)\}', text)
+        for title in subsection_matches:
+            title_lower = title.lower()
+            for existing in self.chapter_state.subsections:
+                if title_lower == existing.lower():
+                    logger.warning(f"potential duplicate subsection: {title}")
+                    break
         
-        return '\n'.join(filtered_lines)
+        return text  # return unchanged, trust the ai
     
     def run(self) -> None:
         """
