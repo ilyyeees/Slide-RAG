@@ -451,7 +451,7 @@ class OllamaClient:
             "options": {
                 "temperature": 0.7,
                 "top_p": 0.9,
-                "num_predict": 4096,  # max tokens to generate
+                "num_predict": 8192,  # increased for rtx 5090
             }
         }
         
@@ -539,7 +539,7 @@ class OllamaClient:
             "options": {
                 "temperature": 0.7,
                 "top_p": 0.9,
-                "num_predict": 4096,
+                "num_predict": 8192,  # increased for rtx 5090
             }
         }
         
@@ -713,6 +713,89 @@ class ProgressTracker:
             self.progress_file.unlink()
 
 
+class ChapterStateTracker:
+    """
+    tracks chapter state to prevent repetition and hallucinations.
+    
+    maintains:
+    - list of section titles already written
+    - key topics/concepts already covered
+    - definitions already provided
+    - examples already given
+    
+    this helps the llm avoid repeating content.
+    """
+    
+    def __init__(self):
+        self.sections: List[str] = []
+        self.subsections: List[str] = []
+        self.topics_covered: set = set()
+        self.definitions_given: set = set()
+        self.examples_given: set = set()
+        self.figure_labels: set = set()
+    
+    def extract_from_content(self, content: str) -> None:
+        """extract structural elements from generated content."""
+        # extract section titles
+        section_matches = re.findall(r'\\section\{([^}]+)\}', content)
+        self.sections.extend(section_matches)
+        
+        # extract subsection titles
+        subsection_matches = re.findall(r'\\subsection\{([^}]+)\}', content)
+        self.subsections.extend(subsection_matches)
+        
+        # extract definition names
+        def_matches = re.findall(r'\\begin\{definition\}[^{]*\{([^}]+)\}', content)
+        self.definitions_given.update(def_matches)
+        
+        # extract example titles
+        ex_matches = re.findall(r'\\begin\{example\}[^{]*\{([^}]+)\}', content)
+        self.examples_given.update(ex_matches)
+        
+        # extract figure labels
+        fig_matches = re.findall(r'\\label\{(fig:[^}]+)\}', content)
+        self.figure_labels.update(fig_matches)
+        
+        # extract key topics from keyconcept boxes
+        topic_matches = re.findall(r'\\begin\{keyconcept\}.*?\\end\{keyconcept\}', content, re.DOTALL)
+        for topic in topic_matches:
+            # extract first significant words
+            words = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*', topic)
+            self.topics_covered.update(words[:3])
+    
+    def get_context_summary(self) -> str:
+        """generate a summary of what has been covered."""
+        parts = []
+        
+        if self.sections:
+            parts.append(f"SECTIONS ALREADY WRITTEN: {', '.join(self.sections[-5:])}")
+        
+        if self.subsections:
+            parts.append(f"SUBSECTIONS ALREADY WRITTEN: {', '.join(self.subsections[-8:])}")
+        
+        if self.definitions_given:
+            parts.append(f"DEFINITIONS ALREADY PROVIDED: {', '.join(list(self.definitions_given)[-10:])}")
+        
+        if self.examples_given:
+            parts.append(f"EXAMPLES ALREADY GIVEN: {', '.join(list(self.examples_given)[-5:])}")
+        
+        return "\n".join(parts)
+    
+    def is_duplicate_section(self, title: str) -> bool:
+        """check if a section title is too similar to existing ones."""
+        title_lower = title.lower().strip()
+        for existing in self.sections:
+            existing_lower = existing.lower().strip()
+            # check for exact match or high similarity
+            if title_lower == existing_lower:
+                return True
+            # check for similar starts (e.g., "Rationality" vs "Rationality in Action")
+            if title_lower.startswith(existing_lower[:20]) or existing_lower.startswith(title_lower[:20]):
+                if len(title_lower) > 10 and len(existing_lower) > 10:
+                    return True
+        return False
+
+
 class TextbookAgent:
     """
     main orchestrator for textbook generation.
@@ -736,23 +819,30 @@ class TextbookAgent:
     # system prompt for the llm
     SYSTEM_PROMPT = """You are an expert textbook author writing a comprehensive, deep-dive chapter in LaTeX format.
 
-Your writing must follow these principles:
+CRITICAL ANTI-REPETITION RULES:
+1. NEVER repeat a section title that has already been written (check the "ALREADY COVERED" list)
+2. NEVER re-explain a concept/definition that was already defined
+3. If a topic was covered before, reference it briefly ("As discussed in Section X...") instead of re-explaining
+4. Each section must have a UNIQUE title - do not write "Rationality" twice
+5. Do NOT reference figures, sources, or sections that don't exist (NO "Source 1", "Figure X", etc.)
 
-1. EXHAUSTIVE COVERAGE: Expand every bullet point into a complete, rigorous explanation. Do not skip "minor" details.
+SLIDE TYPE HANDLING:
+- If the slide is just a TITLE or OUTLINE (1-2 phrases, no bullet points): Write only a brief introduction paragraph (2-3 sentences) setting up what comes next. Do NOT expand into full sections.
+- If the slide has SUBSTANTIVE content (bullet points, definitions): Expand fully into comprehensive explanations.
 
-2. NARRATIVE FLOW: Create smooth transitions between topics. Never jump abruptly. Link concepts logically.
+CONTENT PRINCIPLES:
+1. EXHAUSTIVE COVERAGE: Expand bullet points into complete, rigorous explanations
+2. NARRATIVE FLOW: Create smooth transitions. Link concepts logically
+3. INTUITION FIRST: Explain concepts simply before equations
+4. THE "WHY" AND "HOW": Explain why techniques are needed
+5. LaTeX CONVENTIONS: Use provided environments (definition, theorem, example, keyconcept, etc.)
+6. CONTINUITY: Your output continues previously generated text. Maintain consistent style
 
-3. INTUITION FIRST: Before equations or pseudocode, explain concepts simply. Build mental models.
-
-4. THE "WHY" AND "HOW": Explain why each technique is needed and how it solves specific problems.
-
-5. ENGAGING STYLE: Write like a compelling technical blog meets textbook. Make the subject exciting.
-
-6. LaTeX CONVENTIONS: Use the provided environments (definition, theorem, example, keyconcept, historicalnote, etc.)
-
-7. MAXIMALIST OUTPUT: Generate comprehensive content. Do not summarize or abbreviate. If something can be explained more deeply, do it.
-
-8. CONTINUITY: Your output continues the previously generated text. Maintain consistent style and flow."""
+OUTPUT RULES:
+- Output ONLY valid LaTeX content
+- NO markdown code blocks
+- NO \\documentclass, \\begin{document}, or \\end{document}
+- NO references to non-existent figures or sources"""
 
     def __init__(
         self,
@@ -762,7 +852,7 @@ Your writing must follow these principles:
         output_path: str = "output.tex",
         model: str = "deepseek-r1:8b",
         ollama_url: str = "http://localhost:11434",
-        rolling_context_chars: int = 1000,
+        rolling_context_chars: int = 2500,  # increased for rtx 5090
         retrieval_top_k: int = 5,
         resume: bool = True
     ):
@@ -793,6 +883,7 @@ Your writing must follow these principles:
         self.retriever = ChromaRetriever(db_path, collection_name)
         self.ollama = OllamaClient(ollama_url, model)
         self.progress = ProgressTracker(output_path)
+        self.chapter_state = ChapterStateTracker()  # track what's been written
         
         # current rolling context buffer
         self.rolling_context = ""
@@ -836,9 +927,10 @@ Your writing must follow these principles:
         build the generation prompt for a slide.
         
         prompt structure:
-        1. rolling context (previous output for flow)
-        2. retrieved textbook chunks (source material)
-        3. current slide content (target to expand)
+        1. chapter state (what's already covered - anti-repetition)
+        2. rolling context (previous output for flow)
+        3. retrieved textbook chunks (source material)
+        4. current slide content (target to expand)
         
         args:
             slide: the current slide to process
@@ -849,6 +941,13 @@ Your writing must follow these principles:
         """
         parts = []
         
+        # section 0: what has already been covered (anti-repetition)
+        chapter_summary = self.chapter_state.get_context_summary()
+        if chapter_summary:
+            parts.append("=== ALREADY COVERED (DO NOT REPEAT) ===")
+            parts.append(chapter_summary)
+            parts.append("")
+        
         # section 1: rolling context for narrative flow
         rolling = self._get_rolling_context()
         if rolling:
@@ -856,34 +955,66 @@ Your writing must follow these principles:
             parts.append(rolling)
             parts.append("")
         
-        # section 2: retrieved textbook content
+        # section 2: retrieved textbook content (remove "Source X" labels)
         if retrieved_chunks:
-            parts.append("=== RELEVANT TEXTBOOK CONTENT ===")
-            for i, chunk in enumerate(retrieved_chunks, 1):
-                parts.append(f"[Source {i}]")
-                parts.append(chunk[:1500])  # limit chunk length
-                parts.append("")
+            parts.append("=== REFERENCE MATERIAL ===")
+            for chunk in retrieved_chunks:
+                parts.append(chunk[:1500])
+                parts.append("---")
+            parts.append("")
         
         # section 3: slide content to expand
         parts.append("=== SLIDE CONTENT TO EXPAND ===")
         parts.append(f"Slide {slide.slide_number}: {slide.title}")
         parts.append("")
-        parts.append("Content to cover:")
-        parts.append(slide.content)
+        
+        # detect slide type
+        is_title_slide = self._is_title_or_outline_slide(slide)
+        
+        if is_title_slide:
+            parts.append("NOTE: This is a TITLE/OUTLINE slide. Write only a brief introduction (2-3 sentences).")
+        else:
+            parts.append("Content to cover:")
+            parts.append(slide.content)
         parts.append("")
         
         # instructions
         parts.append("=== INSTRUCTIONS ===")
-        parts.append("Generate comprehensive LaTeX content that:")
-        parts.append("1. Expands each bullet point into full explanations")
-        parts.append("2. Uses the textbook content as reference material")
-        parts.append("3. Maintains smooth flow from the previous output")
-        parts.append("4. Uses appropriate LaTeX environments (definition, theorem, example, etc.)")
-        parts.append("5. Includes intuitive explanations before formal definitions")
+        if is_title_slide:
+            parts.append("Write a brief transitional paragraph introducing the upcoming topic.")
+            parts.append("Do NOT create new sections or definitions for title slides.")
+        else:
+            parts.append("Generate comprehensive LaTeX content that:")
+            parts.append("1. Expands each bullet point into full explanations")
+            parts.append("2. Uses reference material for accuracy (but don't cite 'Source X')")
+            parts.append("3. Maintains smooth flow from the previous output")
+            parts.append("4. Uses appropriate LaTeX environments")
+            parts.append("5. Does NOT repeat any section/definition listed in 'ALREADY COVERED'")
         parts.append("")
-        parts.append("Output ONLY the LaTeX content, no preamble or document tags.")
+        parts.append("Output ONLY valid LaTeX content.")
         
         return "\n".join(parts)
+    
+    def _is_title_or_outline_slide(self, slide: SlideData) -> bool:
+        """detect if a slide is just a title or outline (minimal content)."""
+        content = slide.content.strip()
+        
+        # empty or very short content
+        if len(content) < 50:
+            return True
+        
+        # count bullet points / lines
+        lines = [l.strip() for l in content.split('\n') if l.strip()]
+        if len(lines) <= 2:
+            return True
+        
+        # check for outline keywords
+        outline_keywords = ['outline', 'overview', 'agenda', 'contents', 'topics']
+        title_lower = slide.title.lower()
+        if any(kw in title_lower for kw in outline_keywords):
+            return True
+        
+        return False
     
     def _initialize_output_file(self) -> None:
         """
@@ -964,13 +1095,19 @@ Your writing must follow these principles:
             # step 5: clean the output
             generated = self._clean_latex_output(generated)
             
-            # step 6: append to file
+            # step 5.5: detect and remove duplicate sections
+            generated = self._remove_duplicate_sections(generated)
+            
+            # step 6: update chapter state BEFORE appending
+            self.chapter_state.extract_from_content(generated)
+            
+            # step 7: append to file
             self._append_to_output(generated)
             
-            # step 7: update rolling context
+            # step 8: update rolling context
             self._update_rolling_context(generated)
             
-            # step 8: mark progress
+            # step 9: mark progress
             self.progress.mark_completed(slide.slide_number)
             
             console.print(f"[green]✓ slide {slide.slide_number} complete ({len(generated)} chars)[/green]")
@@ -1005,10 +1142,79 @@ Your writing must follow these principles:
         text = re.sub(r'\\end\{document\}', '', text)
         text = re.sub(r'\\usepackage.*?\n', '', text)
         
+        # remove hallucinated references
+        # "Source 1", "Source 2", etc.
+        text = re.sub(r'\[?Source\s*\d+\]?', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\(see Source\s*\d+\)', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'as discussed in Source\s*\d+', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'according to Source\s*\d+', '', text, flags=re.IGNORECASE)
+        
+        # remove references to non-existent figures (unless we know they exist)
+        known_figures = self.chapter_state.figure_labels if hasattr(self, 'chapter_state') else set()
+        def check_figure_ref(match):
+            label = match.group(1) if match.group(1) else match.group(0)
+            if f"fig:{label}" not in known_figures and label not in known_figures:
+                return ""  # remove invalid reference
+            return match.group(0)
+        
+        # remove Figure~\ref{fig:X} if fig:X not defined
+        text = re.sub(r'Figure~?\\ref\{fig:[^}]+\}', '', text)
+        text = re.sub(r'\(see Figure~?\\ref\{[^}]+\}\)', '', text)
+        
+        # remove "discussed in Section X" if it looks like a hallucination
+        text = re.sub(r'discussed in Section\s*\d+(\.\d+)?', 'discussed earlier', text)
+        
         # normalize whitespace
         text = re.sub(r'\n{4,}', '\n\n\n', text)
         
+        # remove orphaned parentheses from removed content
+        text = re.sub(r'\(\s*\)', '', text)
+        text = re.sub(r'\s{2,}', ' ', text)
+        
         return text.strip()
+    
+    def _remove_duplicate_sections(self, text: str) -> str:
+        """
+        detect and remove sections that duplicate already-written content.
+        
+        checks section titles against chapter_state and removes duplicates.
+        """
+        lines = text.split('\n')
+        filtered_lines = []
+        skip_until_next_section = False
+        
+        for line in lines:
+            # check for section commands
+            section_match = re.match(r'\\section\{([^}]+)\}', line)
+            subsection_match = re.match(r'\\subsection\{([^}]+)\}', line)
+            
+            if section_match:
+                title = section_match.group(1)
+                if self.chapter_state.is_duplicate_section(title):
+                    logger.warning(f"removing duplicate section: {title}")
+                    skip_until_next_section = True
+                    continue
+                else:
+                    skip_until_next_section = False
+            
+            if subsection_match and not skip_until_next_section:
+                title = subsection_match.group(1)
+                # check if subsection is very similar to existing
+                title_lower = title.lower()
+                for existing in self.chapter_state.subsections:
+                    if title_lower == existing.lower():
+                        logger.warning(f"removing duplicate subsection: {title}")
+                        skip_until_next_section = True
+                        break
+            
+            if not skip_until_next_section:
+                filtered_lines.append(line)
+            elif line.strip().startswith('\\section') or line.strip().startswith('\\chapter'):
+                # new section starts, stop skipping
+                skip_until_next_section = False
+                filtered_lines.append(line)
+        
+        return '\n'.join(filtered_lines)
     
     def run(self) -> None:
         """
