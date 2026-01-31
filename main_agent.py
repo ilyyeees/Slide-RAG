@@ -1136,6 +1136,19 @@ OUTPUT RULES:
         text = re.sub(r'```latex\s*', '', text)
         text = re.sub(r'```\s*', '', text)
         
+        # remove llm meta-commentary (wrapper text)
+        meta_patterns = [
+            r'^Here is the .*?(?:LaTeX|content|chapter|section).*?:\s*',
+            r'^Below is the .*?(?:LaTeX|content|chapter|section).*?:\s*',
+            r'^The following .*?(?:LaTeX|content|chapter|section).*?:\s*',
+            r'This (?:LaTeX )?content provides .*?(?:guidelines|requirements|specifications)\.?\s*$',
+            r'This concludes .*?(?:chapter|section|content)\.?\s*$',
+            r'^I will now .*?:\s*',
+            r'^Let me .*?:\s*',
+        ]
+        for pattern in meta_patterns:
+            text = re.sub(pattern, '', text, flags=re.MULTILINE | re.IGNORECASE)
+        
         # remove any documentclass or begin{document} if llm included them
         text = re.sub(r'\\documentclass.*?\n', '', text)
         text = re.sub(r'\\begin\{document\}', '', text)
