@@ -1074,7 +1074,8 @@ OUTPUT RULES:
             
             # step 2: retrieve relevant chunks
             chunks = self.retriever.retrieve(query, self.retrieval_top_k)
-            logger.debug(f"retrieved {len(chunks)} chunks for slide {slide.slide_number}")
+            console.print(f"[dim]retrieved [bold]{len(chunks)}[/] chunks from textbook[/dim]")
+            logger.info(f"retrieved {len(chunks)} chunks for slide {slide.slide_number}")
             
             # step 3: build prompt
             prompt = self._build_prompt(slide, chunks)
