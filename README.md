@@ -174,6 +174,13 @@ the repo now ignores:
 - progress files
 - the old `gemini version/` directory
 
+## why this layout is better
+
+- shared logic has one home, so fixes stop landing in one backend and getting forgotten in the other
+- the cli makes the project feel like one tool instead of four unrelated scripts
+- runtime state is easier to keep out of git
+- backend choice is now explicit instead of being encoded in the folder layout
+
 ## compatibility commands
 
 if you still want the old command names, these still forward into the new package:
