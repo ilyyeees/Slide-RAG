@@ -1,290 +1,197 @@
-# SlideRAG - Rolling Context RAG for Textbook Generation
+# sliderag
 
-An autonomous textbook generation agent that synthesizes course slides and textbook content into cohesive, deep-dive LaTeX chapters using a Rolling Context RAG architecture.
+sliderag is now one project, not two drifting copies.
 
-## Architecture
+the shared pipeline lives in one package, and the llm choice is a backend decision:
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         ROLLING CONTEXT RAG PIPELINE                        │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ┌──────────────┐    ┌───────────────┐    ┌─────────────────────────────┐  │
-│  │ textbook.pdf │───►│ setup_rag.py  │───►│ ChromaDB (Persistent Store) │  │
-│  └──────────────┘    └───────────────┘    └─────────────────────────────┘  │
-│                                                         │                   │
-│  ┌──────────────┐    ┌───────────────┐                  │                   │
-│  │  slides.pdf  │───►│parse_slides.py│───►slides.json   │                   │
-│  └──────────────┘    └───────────────┘        │         │                   │
-│                                               ▼         ▼                   │
-│                                    ┌─────────────────────────┐              │
-│                                    │    main_agent.py        │              │
-│                                    │  ┌───────────────────┐  │              │
-│                                    │  │ For each slide:   │  │              │
-│                                    │  │ 1. Query ChromaDB │  │              │
-│                                    │  │ 2. Build prompt:  │  │              │
-│                                    │  │    - Rolling ctx  │  │              │
-│                                    │  │    - Retrieved    │  │              │
-│                                    │  │    - Slide target │  │              │
-│                                    │  │ 3. Call Ollama    │  │              │
-│                                    │  │ 4. Append output  │  │              │
-│                                    │  └───────────────────┘  │              │
-│                                    └─────────────────────────┘              │
-│                                               │                             │
-│                                               ▼                             │
-│                                    ┌─────────────────────────┐              │
-│                                    │      output.tex         │              │
-│                                    └─────────────────────────┘              │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+- `ollama` for local generation through the ollama api
+- `gemini` for browser-driven generation through the gemini web app
 
-## Quick Start
+the slide parser, rag indexer, progress tracking, latex cleanup, and shared generation state all live in one place now.
 
-### 1. Install Dependencies
+## what changed
 
-```bash
-pip install -r requirements.txt
-```
+the repo used to be split between a root version and a separate `gemini version/` fork. that made every change expensive because shared logic had to be copied, compared, and fixed twice.
 
-### 2. Set Up Ollama (on Vast.ai or local)
+that is gone now.
 
-```bash
-# install ollama if not already installed
-curl -fsSL https://ollama.com/install.sh | sh
+the codebase is organized as a single package:
 
-# start ollama server (runs in background)
-ollama serve &
-
-# pull the reasoning model (32b recommended for best quality)
-ollama pull deepseek-r1:32b
-
-# alternative models (if deepseek unavailable)
-# ollama pull llama3:8b
-# ollama pull mistral:7b
-```
-
-### 3. Prepare Input Files
-
-Place your files in the project root:
-- `textbook.pdf` - the reference textbook
-- `slides.pdf` - course lecture slides
-
-### 4. Run the Pipeline
-
-```bash
-# step 1: ingest textbook into vector database
-python setup_rag.py --pdf textbook.pdf
-
-# step 2: parse slides into structured json
-python parse_slides.py --pdf slides.pdf
-
-# step 3: generate the textbook
-python main_agent.py
-```
-
-The generated LaTeX will be saved to `output.tex`.
-
-## Detailed Usage
-
-### setup_rag.py - Textbook Ingestion
-
-Ingests the textbook PDF into a ChromaDB vector store for semantic retrieval.
-
-```bash
-python setup_rag.py [options]
-
-options:
-  --pdf, -p         path to textbook pdf (default: textbook.pdf)
-  --db-path, -d     chromadb persistence path (default: ./chroma_db)
-  --chunk-size, -s  target characters per chunk (default: 1500)
-  --overlap, -o     overlap between chunks (default: 200)
-  --force, -f       force re-indexing even if unchanged
-  --verbose, -v     enable debug logging
-```
-
-**features:**
-- intelligent chunking with sentence boundary detection
-- embeddings using sentence-transformers (all-MiniLM-L6-v2)
-- idempotent operation (skips if document unchanged)
-- persistent chromadb storage
-
-### parse_slides.py - Slide Parsing
-
-Converts slide PDF into structured JSON for the generation loop.
-
-```bash
-python parse_slides.py [options]
-
-options:
-  --pdf, -p           path to slides pdf (default: slides.pdf)
-  --output, -o        output json path (default: slides.json)
-  --fallback, -f      use pdfplumber instead of pymupdf
-  --include-empty     include empty slides
-  --verbose, -v       enable debug logging
-```
-
-**output format:**
-```json
-[
-  {
-    "slide_number": 1,
-    "title": "Introduction to AI",
-    "content": "- what is ai?\n- history of ai\n- applications"
-  }
-]
-```
-
-### main_agent.py - Generation Agent
-
-The core generation engine implementing Rolling Context RAG.
-
-```bash
-python main_agent.py [options]
-
-options:
-  --slides, -s        parsed slides json (default: slides.json)
-  --output, -o        output tex file (default: output.tex)
-  --db-path, -d       chromadb path (default: ./chroma_db)
-  --model, -m         ollama model (default: deepseek-r1:32b)
-  --ollama-url, -u    ollama api url (default: http://localhost:11434)
-  --context-chars     rolling context size (default: 1000)
-  --top-k, -k         chunks to retrieve per slide (default: 5)
-  --no-resume         start fresh, don't resume
-  --verbose, -v       enable debug logging
-```
-
-**features:**
-- rolling context for narrative continuity
-- semantic retrieval from textbook
-- progress tracking with resume capability
-- full latex preamble included
-
-## Model Recommendations
-
-| Model | Best For | Notes |
-|-------|----------|-------|
-| `deepseek-r1:8b` | mathematical/latex content | recommended for rigorous textbooks |
-| `llama3:8b` | general content | good balance of speed/quality |
-| `mistral:7b` | faster generation | lighter weight alternative |
-| `deepseek-r1:32b` | highest quality | requires more vram |
-
-## Vast.ai Deployment
-
-### Instance Setup
-
-1. create a vast.ai instance with gpu (rtx 3090 or better recommended)
-2. select pytorch or cuda docker image
-3. ssh into the instance
-
-### Commands
-
-```bash
-# clone your repo
-git clone https://github.com/yourusername/sliderag.git
-cd sliderag
-
-# install python dependencies
-pip install -r requirements.txt
-
-# install ollama
-curl -fsSL https://ollama.com/install.sh | sh
-
-# start ollama (in background with nohup)
-nohup ollama serve > ollama.log 2>&1 &
-
-# pull the model (this may take a while)
-ollama pull deepseek-r1:32b
-
-# upload your pdfs (use scp or direct upload)
-# scp textbook.pdf user@vastai-ip:~/sliderag/
-# scp slides.pdf user@vastai-ip:~/sliderag/
-
-# run the pipeline
-python setup_rag.py
-python parse_slides.py
-python main_agent.py
-
-# download the output
-# scp user@vastai-ip:~/sliderag/output.tex ./
-```
-
-### Monitoring
-
-```bash
-# watch generation progress
-tail -f output.tex
-
-# check ollama logs
-tail -f ollama.log
-
-# monitor gpu usage
-nvidia-smi -l 1
-```
-
-## Troubleshooting
-
-### Ollama Connection Failed
-
-```bash
-# check if ollama is running
-curl http://localhost:11434/api/tags
-
-# restart ollama
-pkill ollama
-ollama serve &
-```
-
-### Out of Memory
-
-- use a smaller model: `--model llama3:8b` or `--model mistral:7b`
-- reduce chunk retrieval: `--top-k 3`
-- reduce context: `--context-chars 500`
-
-### Empty Output
-
-- check slides.json has content: `cat slides.json | head`
-- verify chromadb has documents: run python and check `collection.count()`
-- check ollama model is working: `ollama run deepseek-r1:8b "test"`
-
-### Resume After Interruption
-
-The agent automatically saves progress. just run again:
-
-```bash
-python main_agent.py
-```
-
-To start fresh:
-
-```bash
-python main_agent.py --no-resume
-rm output.tex output.progress.json
-```
-
-## Project Structure
-
-```
+```text
 sliderag/
-├── requirements.txt     # python dependencies
-├── setup_rag.py         # textbook ingestion to chromadb
-├── parse_slides.py      # slide pdf to json parser
-├── main_agent.py        # generation agent
-├── README.md            # this file
-├── AGENTS.md            # operational directives
-├── Instructions.md      # project specifications
-│
-├── textbook.pdf         # input: reference textbook (user provides)
-├── slides.pdf           # input: course slides (user provides)
-├── slides.json          # intermediate: parsed slides
-├── output.tex           # output: generated latex
-├── output.progress.json # progress tracking
-│
-└── chroma_db/           # persistent vector store
-    ├── chroma.sqlite3
-    └── ...
+├── __main__.py
+├── browser_client.py
+├── cli.py
+├── common.py
+├── gemini.py
+├── ollama.py
+├── parse_slides.py
+└── setup_rag.py
 ```
 
-## License
+the old script names still work, but they are wrappers now:
 
-MIT
+```text
+main_agent.py
+gemini_agent.py
+parse_slides.py
+setup_rag.py
+```
+
+## the new cli
+
+the main way in is now:
+
+```bash
+python -m sliderag
+```
+
+that opens the top-level command hub with the shared workflow and every module entrypoint.
+
+### top-level commands
+
+```bash
+python -m sliderag help generate
+python -m sliderag parse-slides -- --pdf data/input/slides.pdf --output runs/course/slides.json
+python -m sliderag setup-rag -- --pdf data/input/textbook.pdf --db-path data/indexes/chroma_db
+python -m sliderag generate --backend ollama -- --slides runs/course/slides.json
+python -m sliderag generate --backend gemini -- --slides runs/course/slides.json
+python -m sliderag gemini-login
+python -m sliderag gemini-diagnose
+```
+
+the `--` separator is the cleanest way to pass the rest of the flags through to the underlying module.
+
+## install
+
+```bash
+pip install -r requirements.txt
+```
+
+for the gemini backend, install chromium once:
+
+```bash
+playwright install chromium
+```
+
+note on the python stack: the current ml dependencies need `numpy<2`, and the repo now pins that in `requirements.txt`.
+
+## normal workflow
+
+### 1. build the textbook index
+
+```bash
+python -m sliderag setup-rag -- \
+  --pdf data/input/textbook.pdf \
+  --db-path data/indexes/chroma_db
+```
+
+### 2. parse the slide deck
+
+```bash
+python -m sliderag parse-slides -- \
+  --pdf data/input/slides.pdf \
+  --output runs/course/slides.json
+```
+
+### 3. generate with the backend you want
+
+ollama:
+
+```bash
+python -m sliderag generate --backend ollama -- \
+  --slides runs/course/slides.json \
+  --db-path data/indexes/chroma_db \
+  --output runs/course/output.tex \
+  --model deepseek-r1:32b
+```
+
+gemini:
+
+```bash
+python -m sliderag gemini-login
+
+python -m sliderag generate --backend gemini -- \
+  --slides runs/course/slides.json \
+  --db-path data/indexes/chroma_db \
+  --output runs/course/output.tex \
+  --batch-size 5 \
+  --browser-profile data/profiles/gemini_browser_profile
+```
+
+## backend notes
+
+### ollama
+
+use this when you want local inference or a remote box you control.
+
+```bash
+ollama serve &
+ollama pull deepseek-r1:32b
+python -m sliderag generate --backend ollama -- --model deepseek-r1:32b
+```
+
+full notes: [docs/backends/ollama.md](docs/backends/ollama.md)
+
+### gemini
+
+use this when you want browser automation instead of local inference.
+
+```bash
+python -m sliderag gemini-login
+python -m sliderag gemini-diagnose
+python -m sliderag generate --backend gemini -- --batch-size 3
+```
+
+full notes: [docs/backends/gemini.md](docs/backends/gemini.md)
+
+## recommended repo hygiene
+
+keep runtime state outside the source package. a sane layout looks like this:
+
+```text
+data/
+├── input/
+│   ├── slides.pdf
+│   └── textbook.pdf
+├── indexes/
+│   └── chroma_db/
+└── profiles/
+    └── gemini_browser_profile/
+
+runs/
+└── course-name/
+    ├── slides.json
+    ├── output.tex
+    └── output.progress.json
+```
+
+the repo now ignores:
+
+- browser profiles
+- chromadb state
+- generated tex and pdf files
+- progress files
+- the old `gemini version/` directory
+
+## compatibility commands
+
+if you still want the old command names, these still forward into the new package:
+
+```bash
+python main_agent.py
+python gemini_agent.py --login
+python parse_slides.py --pdf slides.pdf
+python setup_rag.py --pdf textbook.pdf
+```
+
+## short version
+
+if you only remember four commands, remember these:
+
+```bash
+python -m sliderag
+python -m sliderag setup-rag -- --pdf textbook.pdf
+python -m sliderag parse-slides -- --pdf slides.pdf
+python -m sliderag generate --backend ollama -- --slides slides.json
+```
