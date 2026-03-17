@@ -1,66 +1,76 @@
 # sliderag
 
-sliderag is now one project, not two drifting copies.
+sliderag turns a slide deck and a reference textbook into a long-form latex chapter.
 
-the shared pipeline lives in one package, and the llm choice is a backend decision:
+the idea is simple:
 
-- `ollama` for local generation through the ollama api
-- `gemini` for browser-driven generation through the gemini web app
+- slides give the structure
+- the textbook gives the factual grounding
+- the generator expands short bullet points into readable textbook prose
 
-the slide parser, rag indexer, progress tracking, latex cleanup, and shared generation state all live in one place now.
+the output is not a summary. it is a chapter-writing pipeline built for producing detailed course material from sparse lecture slides.
 
-## what changed
+## what it does
 
-the repo used to be split between a root version and a separate `gemini version/` fork. that made every change expensive because shared logic had to be copied, compared, and fixed twice.
+sliderag runs a rolling-context rag pipeline:
 
-that is gone now.
+1. it reads a textbook pdf and stores chunked embeddings in chromadb
+2. it reads a slide deck pdf and converts it into structured json
+3. for each slide, or batch of slides, it retrieves relevant textbook context
+4. it feeds the slide content, retrieved context, and recent generated output into an llm
+5. it writes latex incrementally so long runs can resume after interruption
 
-the codebase is organized as a single package:
+the result is a latex textbook chapter that follows the slide sequence but has much more depth, continuity, and explanation than the slides alone.
 
-```text
-sliderag/
-├── __main__.py
-├── browser_client.py
-├── cli.py
-├── common.py
-├── gemini.py
-├── ollama.py
-├── parse_slides.py
-└── setup_rag.py
-```
+## where it fits
 
-the old script names still work, but they are wrappers now:
+sliderag is useful when you have:
 
-```text
-main_agent.py
-gemini_agent.py
-parse_slides.py
-setup_rag.py
-```
+- lecture slides that are too brief to stand alone
+- a textbook or reference pdf that contains the missing detail
+- a need to produce notes, chapters, or expanded course handouts in latex
 
-## the new cli
+it is not a general chatbot app. it is a document-generation pipeline with a specific input shape and a specific output target.
 
-the main way in is now:
+## backends
 
-```bash
-python -m sliderag
-```
+sliderag supports two generation backends:
 
-that opens the top-level command hub with the shared workflow and every module entrypoint.
+### ollama
 
-### top-level commands
+use this when you want local inference or a remote machine you control.
+
+- backend: local ollama api
+- good for: private runs, local experimentation, controlled environments
+- requirements: ollama running with a compatible model
+
+example:
 
 ```bash
-python -m sliderag help generate
-python -m sliderag parse-slides -- --pdf data/input/slides.pdf --output runs/course/slides.json
-python -m sliderag setup-rag -- --pdf data/input/textbook.pdf --db-path data/indexes/chroma_db
+ollama serve &
+ollama pull deepseek-r1:32b
 python -m sliderag generate --backend ollama -- --slides runs/course/slides.json
-python -m sliderag generate --backend gemini -- --slides runs/course/slides.json
-python -m sliderag gemini-login
-python -m sliderag gemini-diagnose
 ```
 
-the `--` separator is the cleanest way to pass the rest of the flags through to the underlying module.
+### gemini
+
+use this when you want browser-driven generation through the gemini web app.
+
+- backend: gemini in a persistent chromium profile
+- good for: avoiding local inference setup, using gemini through a saved session
+- requirements: playwright, chromium, and a working google login
+
+example:
+
+```bash
+python -m sliderag gemini-login
+python -m sliderag generate --backend gemini -- --slides runs/course/slides.json
+```
+
+more detail:
+
+- [docs/backends/ollama.md](docs/backends/ollama.md)
+- [docs/backends/gemini.md](docs/backends/gemini.md)
 
 ## install
 
@@ -68,17 +78,17 @@ the `--` separator is the cleanest way to pass the rest of the flags through to 
 pip install -r requirements.txt
 ```
 
-for the gemini backend, install chromium once:
+for the gemini backend:
 
 ```bash
 playwright install chromium
 ```
 
-note on the python stack: the current ml dependencies need `numpy<2`, and the repo now pins that in `requirements.txt`.
+## core workflow
 
-## normal workflow
+### 1. build the rag index
 
-### 1. build the textbook index
+ingest the reference textbook into chromadb:
 
 ```bash
 python -m sliderag setup-rag -- \
@@ -86,7 +96,9 @@ python -m sliderag setup-rag -- \
   --db-path data/indexes/chroma_db
 ```
 
-### 2. parse the slide deck
+### 2. parse the slides
+
+extract slide titles and content into structured json:
 
 ```bash
 python -m sliderag parse-slides -- \
@@ -94,9 +106,9 @@ python -m sliderag parse-slides -- \
   --output runs/course/slides.json
 ```
 
-### 3. generate with the backend you want
+### 3. generate the chapter
 
-ollama:
+with ollama:
 
 ```bash
 python -m sliderag generate --backend ollama -- \
@@ -106,11 +118,9 @@ python -m sliderag generate --backend ollama -- \
   --model deepseek-r1:32b
 ```
 
-gemini:
+with gemini:
 
 ```bash
-python -m sliderag gemini-login
-
 python -m sliderag generate --backend gemini -- \
   --slides runs/course/slides.json \
   --db-path data/indexes/chroma_db \
@@ -119,35 +129,31 @@ python -m sliderag generate --backend gemini -- \
   --browser-profile data/profiles/gemini_browser_profile
 ```
 
-## backend notes
+## cli
 
-### ollama
-
-use this when you want local inference or a remote box you control.
+the main entrypoint is:
 
 ```bash
-ollama serve &
-ollama pull deepseek-r1:32b
-python -m sliderag generate --backend ollama -- --model deepseek-r1:32b
+python -m sliderag
 ```
 
-full notes: [docs/backends/ollama.md](docs/backends/ollama.md)
-
-### gemini
-
-use this when you want browser automation instead of local inference.
+available commands:
 
 ```bash
+python -m sliderag help generate
+python -m sliderag parse-slides -- --pdf slides.pdf
+python -m sliderag setup-rag -- --pdf textbook.pdf
+python -m sliderag generate --backend ollama -- --slides slides.json
+python -m sliderag generate --backend gemini -- --slides slides.json
 python -m sliderag gemini-login
 python -m sliderag gemini-diagnose
-python -m sliderag generate --backend gemini -- --batch-size 3
 ```
 
-full notes: [docs/backends/gemini.md](docs/backends/gemini.md)
+the `--` separator passes the remaining flags directly to the underlying module.
 
-## recommended repo hygiene
+## inputs and outputs
 
-keep runtime state outside the source package. a sane layout looks like this:
+recommended layout:
 
 ```text
 data/
@@ -166,24 +172,20 @@ runs/
     └── output.progress.json
 ```
 
-the repo now ignores:
+main generated artifact:
 
-- browser profiles
-- chromadb state
-- generated tex and pdf files
-- progress files
-- the old `gemini version/` directory
+- `output.tex`: the generated chapter in latex
 
-## why this layout is better
+other runtime artifacts:
 
-- shared logic has one home, so fixes stop landing in one backend and getting forgotten in the other
-- the cli makes the project feel like one tool instead of four unrelated scripts
-- runtime state is easier to keep out of git
-- backend choice is now explicit instead of being encoded in the folder layout
+- `slides.json`: parsed slides
+- `*.progress.json`: resume state
+- `chroma_db/`: vector index
+- `gemini_browser_profile/`: persistent browser session for gemini
 
 ## compatibility commands
 
-if you still want the old command names, these still forward into the new package:
+the old entrypoints still work:
 
 ```bash
 python main_agent.py
@@ -192,13 +194,6 @@ python parse_slides.py --pdf slides.pdf
 python setup_rag.py --pdf textbook.pdf
 ```
 
-## short version
+## environment note
 
-if you only remember four commands, remember these:
-
-```bash
-python -m sliderag
-python -m sliderag setup-rag -- --pdf textbook.pdf
-python -m sliderag parse-slides -- --pdf slides.pdf
-python -m sliderag generate --backend ollama -- --slides slides.json
-```
+the embedding stack currently expects `numpy<2`, and `requirements.txt` pins that. if your environment already has numpy 2 with older compiled ml wheels, rebuild the venv before running `setup-rag`.
